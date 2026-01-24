@@ -86,4 +86,4 @@ workflow-orchestration-engine/
 
 ## � Questions?
 
-Open an issue or reach out if you have questions or feedback!
+Open an issue or reach out to me if you have questions or feedback!
