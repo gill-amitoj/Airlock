@@ -8,21 +8,21 @@
 </head>
 <body>
     <div class="container">
-        <h1>⚡ Workflow Orchestration Engine</h1>
-        <p class="subtitle">Your Production-Grade Backend System</p>
+        <h1>🚀 Workflow Orchestration Engine</h1>
+        <p class="subtitle">Automate anything. Build workflows visually, run them instantly, and watch the magic happen.</p>
         
-        <!-- Status Cards -->
-        <div class="status-cards">
+        <!-- Status Cards - Compact -->
+        <div class="status-cards compact">
             <div class="status-card healthy">
-                <h3>API Status</h3>
+                <h3>API</h3>
                 <div class="value" id="api-status">...</div>
             </div>
             <div class="status-card healthy">
-                <h3>Database</h3>
+                <h3>DB</h3>
                 <div class="value" id="db-status">...</div>
             </div>
             <div class="status-card healthy">
-                <h3>Redis Queue</h3>
+                <h3>Queue</h3>
                 <div class="value" id="redis-status">...</div>
             </div>
             <div class="status-card count">
@@ -30,15 +30,66 @@
                 <div class="value" id="workflow-count">...</div>
             </div>
             <div class="status-card count">
-                <h3>Executions</h3>
+                <h3>Runs</h3>
                 <div class="value" id="execution-count">...</div>
             </div>
         </div>
 
-        <!-- Workflows Section -->
+        <!-- Hero Action Section - NOW AT TOP -->
+        <div class="section hero-section">
+            <h2>⚡ Try It Now</h2>
+            <p class="info-box">One click = Create workflow → Run it → See results. No setup needed!</p>
+            
+            <div class="demo-grid">
+                <button class="demo-btn" onclick="createAndRunWorkflow('joke')">
+                    <span class="demo-icon">😂</span>
+                    <span class="demo-title">Random Joke</span>
+                    <span class="demo-desc">Fetch a joke from the web</span>
+                </button>
+                
+                <button class="demo-btn" onclick="createAndRunWorkflow('user')">
+                    <span class="demo-icon">👤</span>
+                    <span class="demo-title">Get User</span>
+                    <span class="demo-desc">Fetch fake user data</span>
+                </button>
+                
+                <button class="demo-btn" onclick="createAndRunWorkflow('cat')">
+                    <span class="demo-icon">🐱</span>
+                    <span class="demo-title">Cat Fact</span>
+                    <span class="demo-desc">Random cat fact</span>
+                </button>
+                
+                <button class="demo-btn" onclick="createAndRunWorkflow('todo')">
+                    <span class="demo-icon">✅</span>
+                    <span class="demo-title">Get Todo</span>
+                    <span class="demo-desc">Fetch a todo item</span>
+                </button>
+            </div>
+            
+            <button class="demo-btn multi-step" onclick="createAndRunWorkflow('multi')">
+                <span class="demo-icon">🔗</span>
+                <span class="demo-title">Multi-Step Workflow</span>
+                <span class="demo-desc">3 steps chained together: Joke → User → Post</span>
+            </button>
+            
+            <div id="output-area"></div>
+        </div>
+
+        <!-- AI Workflow Builder - POWERED BY OLLAMA -->
+        <div class="section ai-section">
+            <h2>🤖 AI Workflow Builder <span class="badge-new">New</span></h2>
+            <p class="info-box">Describe what you want to automate in plain English, and AI will build the workflow for you.</p>
+            <div class="ai-input-container">
+                <input type="text" id="ai-prompt" class="ai-input" placeholder="e.g., 'Fetch a random joke and a cat fact'" onkeypress="if(event.key==='Enter') generateAIWorkflow()">
+                <button class="ai-btn" onclick="generateAIWorkflow()">Generate Workflow</button>
+            </div>
+            <p class="ai-hint">💡 Try: "Get a joke" • "Fetch user data and a random quote" • "Get weather for London"</p>
+            <div id="ai-output-area"></div>
+        </div>
+
+        <!-- Workflows Section - History -->
         <div class="section">
-            <h2>
-                <span>📋</span> Workflows 
+            <h2>📋 Your Workflows 
                 <button class="refresh-btn" onclick="loadData()">↻ Refresh</button>
             </h2>
             <div id="workflows-list">
@@ -46,53 +97,22 @@
             </div>
         </div>
 
-        <!-- Executions Section -->
+        <!-- Executions Section - History -->
         <div class="section">
-            <h2><span>🚀</span> Recent Executions</h2>
+            <h2>📊 Execution History</h2>
             <div id="executions-list">
                 <div class="loading">Loading...</div>
             </div>
         </div>
-
-        <!-- Actions Section -->
-        <div class="section">
-            <h2><span>🧪</span> Try It Out - Pick a Demo</h2>
-            
-            <div class="demo-grid">
-                <button class="demo-btn" onclick="createAndRunWorkflow('joke')">
-                    <span class="demo-icon">🎭</span>
-                    <span class="demo-title">Random Joke</span>
-                    <span class="demo-desc">1 step - Fetches a joke</span>
-                </button>
-                
-                <button class="demo-btn" onclick="createAndRunWorkflow('user')">
-                    <span class="demo-icon">👤</span>
-                    <span class="demo-title">Get User</span>
-                    <span class="demo-desc">1 step - Fetches user data</span>
-                </button>
-                
-                <button class="demo-btn" onclick="createAndRunWorkflow('cat')">
-                    <span class="demo-icon">🐱</span>
-                    <span class="demo-title">Cat Fact</span>
-                    <span class="demo-desc">1 step - Random cat fact</span>
-                </button>
-                
-                <button class="demo-btn" onclick="createAndRunWorkflow('todo')">
-                    <span class="demo-icon">📝</span>
-                    <span class="demo-title">Get Todo</span>
-                    <span class="demo-desc">1 step - Fetches a todo</span>
-                </button>
-            </div>
-            
-            <button class="demo-btn multi-step" onclick="createAndRunWorkflow('multi')">
-                <span class="demo-icon">⚡</span>
-                <span class="demo-title">MULTI-STEP WORKFLOW</span>
-                <span class="demo-desc">3 steps - Joke → User → Combine (Shows data chaining!)</span>
-            </button>
-            
-            <div id="output-area"></div>
-        </div>
     </div>
+
+    <footer>
+        <p>Built with ❤️ for learning and automation</p>
+        <p class="footer-links">
+            <a href="https://github.com/gill-amitoj/WorkflowOrchestrationSystem" target="_blank">GitHub</a> •
+            <span>Open Source & Free</span>
+        </p>
+    </footer>
 
     <script src="app.js"></script>
 </body>

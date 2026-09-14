@@ -15,6 +15,7 @@ from src.domain import (
 from src.domain.entities import StepExecution
 from src.domain.state_machine import WorkflowStateMachine, InvalidTransitionError
 from src.persistence import ExecutionRepository, LogRepository, WorkflowRepository
+from .redaction import redact_details
 
 logger = logging.getLogger(__name__)
 
@@ -321,12 +322,17 @@ class ExecutionService:
         step_execution_id: Optional[UUID] = None,
         **details,
     ) -> ExecutionLog:
-        """Create an execution log entry."""
+        """
+        Create an execution log entry.
+
+        Details are redacted first - create_execution logs caller-supplied
+        input_data, which is a realistic place for a credential to appear.
+        """
         log = ExecutionLog.create(
             execution_id=execution_id,
             level=level,
             message=message,
             step_execution_id=step_execution_id,
-            details=details,
+            details=redact_details(details),
         )
         return self.log_repo.create_log(log)

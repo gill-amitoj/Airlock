@@ -16,6 +16,7 @@ from src.domain.entities import StepExecution, WorkflowStep
 from src.persistence import WorkflowRepository, ExecutionRepository, LogRepository
 from src.config import get_config
 from .execution_service import ExecutionService
+from .redaction import redact_details
 from .task_handlers import TaskHandlerRegistry, TaskHandler
 
 logger = logging.getLogger(__name__)
@@ -111,11 +112,16 @@ class WorkflowOrchestrator:
                     )
                     
                     step_outputs[step.name] = output
-                    
-                    # Merge step output into current data for next step
+
+                    # Namespace each step's output under its own name before
+                    # passing it on. A flat merge would clobber earlier steps -
+                    # every http_request step returns the same two keys
+                    # (status_code, response) - so later steps would only ever
+                    # see the most recent one. Nesting keeps every prior step
+                    # reachable, addressable in templates as {step_name[key]}.
                     if output:
-                        current_data.update(output)
-                    
+                        current_data[step.name] = output
+
                     # Update execution progress
                     self.execution_repo.update_execution_status(
                         execution_id,
@@ -299,14 +305,19 @@ class WorkflowOrchestrator:
         step_execution_id: Optional[UUID] = None,
         **details,
     ) -> None:
-        """Create an execution log entry."""
+        """
+        Create an execution log entry.
+
+        Details are redacted first - step failures log error details that can
+        quote step config, and step config can carry auth headers.
+        """
         from src.domain import ExecutionLog
-        
+
         log = ExecutionLog.create(
             execution_id=execution_id,
             level=level,
             message=message,
             step_execution_id=step_execution_id,
-            details=details,
+            details=redact_details(details),
         )
         self.log_repo.create_log(log)

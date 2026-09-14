@@ -7,7 +7,30 @@ Supports environment-based configuration with sensible defaults.
 import os
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Optional
+from typing import Optional, Tuple
+
+
+# Hostnames behind the public APIs the AI workflow generator is allowed to suggest.
+# The generator prompt lists 11 URLs, but several share a host, so this is 9 entries.
+DEFAULT_ALLOWED_HTTP_HOSTS: Tuple[str, ...] = (
+    "official-joke-api.appspot.com",
+    "catfact.ninja",
+    "randomuser.me",
+    "api.quotable.io",
+    "dog.ceo",
+    "www.boredapi.com",
+    "wttr.in",
+    "hacker-news.firebaseio.com",
+    "jsonplaceholder.typicode.com",
+)
+
+
+def _parse_host_list(raw: Optional[str]) -> Tuple[str, ...]:
+    """Parse a comma-separated host list, ignoring blanks and surrounding space."""
+    if raw is None:
+        return DEFAULT_ALLOWED_HTTP_HOSTS
+    hosts = tuple(h.strip().lower() for h in raw.split(",") if h.strip())
+    return hosts
 
 
 @dataclass
@@ -38,7 +61,21 @@ class Config:
     # Queue settings
     QUEUE_NAME: str = "workflow_tasks"
     QUEUE_PROCESSING_TIMEOUT: int = 30  # Visibility timeout in seconds
-    
+
+    # Outbound HTTP settings
+    # Hostnames that http_request steps are permitted to call. Step URLs come from
+    # users and from the AI workflow generator, so this allowlist - not the model
+    # prompt - is what actually constrains where the engine sends requests.
+    ALLOWED_HTTP_HOSTS: tuple = DEFAULT_ALLOWED_HTTP_HOSTS
+
+    # LLM settings (AI workflow generator)
+    OLLAMA_URL: str = "http://host.docker.internal:11434/api/generate"
+    OLLAMA_MODEL: str = "llama3.2:1b"
+    LLM_TEMPERATURE: float = 0.3
+    LLM_TIMEOUT: int = 60  # Seconds to wait for a generation response
+    LLM_NUM_PREDICT: int = 500  # Max tokens the model may generate
+    LLM_MAX_STEPS: int = 10  # Max steps a generated workflow may contain
+
     # Logging settings
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -62,6 +99,13 @@ class Config:
             TASK_TIMEOUT=int(os.getenv("TASK_TIMEOUT", cls.TASK_TIMEOUT)),
             QUEUE_NAME=os.getenv("QUEUE_NAME", cls.QUEUE_NAME),
             QUEUE_PROCESSING_TIMEOUT=int(os.getenv("QUEUE_PROCESSING_TIMEOUT", cls.QUEUE_PROCESSING_TIMEOUT)),
+            ALLOWED_HTTP_HOSTS=_parse_host_list(os.getenv("ALLOWED_HTTP_HOSTS")),
+            OLLAMA_URL=os.getenv("OLLAMA_URL", cls.OLLAMA_URL),
+            OLLAMA_MODEL=os.getenv("OLLAMA_MODEL", cls.OLLAMA_MODEL),
+            LLM_TEMPERATURE=float(os.getenv("LLM_TEMPERATURE", cls.LLM_TEMPERATURE)),
+            LLM_TIMEOUT=int(os.getenv("LLM_TIMEOUT", cls.LLM_TIMEOUT)),
+            LLM_NUM_PREDICT=int(os.getenv("LLM_NUM_PREDICT", cls.LLM_NUM_PREDICT)),
+            LLM_MAX_STEPS=int(os.getenv("LLM_MAX_STEPS", cls.LLM_MAX_STEPS)),
             LOG_LEVEL=os.getenv("LOG_LEVEL", cls.LOG_LEVEL),
             LOG_FORMAT=os.getenv("LOG_FORMAT", cls.LOG_FORMAT),
         )

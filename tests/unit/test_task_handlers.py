@@ -14,6 +14,7 @@ from src.services.task_handlers import (
     LogHandler,
     create_default_registry,
 )
+from src.services.url_guard import BlockedUrlError
 
 
 class TestTaskHandlerRegistry:
@@ -310,13 +311,30 @@ class TestDataTransformHandler:
 
 
 class TestHttpRequestHandler:
-    """Tests for HttpRequestHandler."""
-    
+    """
+    Tests for HttpRequestHandler.
+
+    These tests call api.example.com, which is not on the production allowlist,
+    so the handler is constructed with that host injected. resolve_hostname is
+    patched class-wide so validation never performs a DNS lookup.
+    """
+
+    ALLOWED = ["api.example.com"]
+
+    @pytest.fixture(autouse=True)
+    def _stub_dns(self):
+        """Resolve every host to a routable address, with no network access."""
+        with patch(
+            "src.services.url_guard.resolve_hostname",
+            return_value=["93.184.216.34"],
+        ) as mock_resolve:
+            yield mock_resolve
+
     def test_task_type(self):
         """Test task type property."""
         handler = HttpRequestHandler()
         assert handler.task_type == "http_request"
-    
+
     @patch("requests.request")
     def test_execute_get_request(self, mock_request):
         """Test GET request execution."""
@@ -325,7 +343,7 @@ class TestHttpRequestHandler:
         mock_response.json.return_value = {"data": "test"}
         mock_request.return_value = mock_response
         
-        handler = HttpRequestHandler()
+        handler = HttpRequestHandler(allowed_hosts=self.ALLOWED)
         result = handler.execute(
             step_config={
                 "url": "https://api.example.com/test",
@@ -346,7 +364,7 @@ class TestHttpRequestHandler:
         mock_response.json.return_value = {"id": "123"}
         mock_request.return_value = mock_response
         
-        handler = HttpRequestHandler()
+        handler = HttpRequestHandler(allowed_hosts=self.ALLOWED)
         result = handler.execute(
             step_config={
                 "url": "https://api.example.com/create",
@@ -369,7 +387,7 @@ class TestHttpRequestHandler:
         mock_response.json.return_value = {}
         mock_request.return_value = mock_response
         
-        handler = HttpRequestHandler()
+        handler = HttpRequestHandler(allowed_hosts=self.ALLOWED)
         handler.execute(
             step_config={
                 "url": "https://api.example.com/users/{user_id}",
@@ -389,13 +407,90 @@ class TestHttpRequestHandler:
         mock_response.text = "Internal Server Error"
         mock_request.return_value = mock_response
         
-        handler = HttpRequestHandler()
-        
+        handler = HttpRequestHandler(allowed_hosts=self.ALLOWED)
+
         with pytest.raises(Exception, match="HTTP request failed"):
             handler.execute(
                 step_config={
                     "url": "https://api.example.com/error",
                     "method": "GET",
                 },
+                input_data={},
+            )
+
+    @patch("requests.request")
+    def test_blocked_host_raises_before_request(self, mock_request):
+        """A non-allowlisted host is refused and no request is sent."""
+        handler = HttpRequestHandler(allowed_hosts=self.ALLOWED)
+
+        with pytest.raises(BlockedUrlError, match="not in the allowlist"):
+            handler.execute(
+                step_config={
+                    "url": "https://evil.example.com/exfiltrate",
+                    "method": "GET",
+                },
+                input_data={},
+            )
+
+        mock_request.assert_not_called()
+
+    @patch("requests.request")
+    def test_private_address_raises_before_request(self, mock_request, _stub_dns):
+        """An allowlisted host resolving internally is refused before the request."""
+        _stub_dns.return_value = ["169.254.169.254"]
+        handler = HttpRequestHandler(allowed_hosts=self.ALLOWED)
+
+        with pytest.raises(BlockedUrlError, match="non-public address"):
+            handler.execute(
+                step_config={
+                    "url": "https://api.example.com/meta",
+                    "method": "GET",
+                },
+                input_data={},
+            )
+
+        mock_request.assert_not_called()
+
+    @patch("requests.request")
+    def test_template_cannot_smuggle_blocked_host(self, mock_request):
+        """
+        Validation runs after substitution, so input data cannot inject a host.
+
+        This is the ordering that matters: validating the raw template would
+        check 'api.example.com' and then request somewhere else entirely.
+        """
+        handler = HttpRequestHandler(allowed_hosts=self.ALLOWED)
+
+        with pytest.raises(BlockedUrlError, match="not in the allowlist"):
+            handler.execute(
+                step_config={
+                    "url": "https://{host}/data",
+                    "method": "GET",
+                },
+                input_data={"host": "evil.example.com"},
+            )
+
+        mock_request.assert_not_called()
+
+    @patch("requests.request")
+    def test_default_allowlist_comes_from_config(self, mock_request):
+        """With no injection, the handler enforces the configured allowlist."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"fact": "cats sleep a lot"}
+        mock_request.return_value = mock_response
+
+        handler = HttpRequestHandler()
+
+        # On the default allowlist.
+        handler.execute(
+            step_config={"url": "https://catfact.ninja/fact", "method": "GET"},
+            input_data={},
+        )
+
+        # Not on it.
+        with pytest.raises(BlockedUrlError):
+            handler.execute(
+                step_config={"url": "https://evil.example.com/", "method": "GET"},
                 input_data={},
             )

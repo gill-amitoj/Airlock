@@ -22,6 +22,12 @@ from src.services.workflow_service import (
 from src.services.execution_service import (
     ExecutionNotFoundError, ExecutionStateError, DuplicateExecutionError
 )
+from src.services.llm_service import (
+    WorkflowGenerationService,
+    LLMUnavailableError,
+    LLMTimeoutError,
+    LLMValidationError,
+)
 from src.worker import TaskQueue
 
 logger = logging.getLogger(__name__)
@@ -29,6 +35,7 @@ logger = logging.getLogger(__name__)
 # Create blueprints
 workflows_bp = Blueprint("workflows", __name__, url_prefix="/api/v1/workflows")
 executions_bp = Blueprint("executions", __name__, url_prefix="/api/v1/executions")
+ai_bp = Blueprint("ai", __name__, url_prefix="/api/v1/ai")
 
 
 def get_db() -> Database:
@@ -62,6 +69,13 @@ def get_queue() -> TaskQueue:
     if "task_queue" not in g:
         g.task_queue = TaskQueue()
     return g.task_queue
+
+
+def get_workflow_generation_service() -> WorkflowGenerationService:
+    """Get or create WorkflowGenerationService."""
+    if "workflow_generation_service" not in g:
+        g.workflow_generation_service = WorkflowGenerationService()
+    return g.workflow_generation_service
 
 
 # ============================================
@@ -525,6 +539,51 @@ def log_to_dict(log) -> dict:
 
 
 # ============================================
+# AI ENDPOINTS
+# ============================================
+
+@ai_bp.route("/generate-workflow", methods=["POST"])
+def generate_workflow():
+    """
+    Generate workflow steps from a natural language prompt.
+
+    Request body:
+    {
+        "prompt": "Fetch weather data for London and a cat fact"
+    }
+
+    Response: 200 OK with validated steps
+    """
+    data = request.get_json()
+
+    if not data or not data.get("prompt"):
+        return jsonify({"error": "prompt is required"}), 400
+
+    user_prompt = data["prompt"]
+
+    try:
+        service = get_workflow_generation_service()
+        steps = service.generate_steps(user_prompt)
+
+        return jsonify({
+            "success": True,
+            "prompt": user_prompt,
+            "steps": steps,
+        }), 200
+
+    except LLMValidationError as e:
+        # The model answered, but not with a usable workflow.
+        return jsonify({"error": str(e)}), 400
+    except LLMTimeoutError as e:
+        return jsonify({"error": str(e), "hint": "Try a simpler prompt"}), 504
+    except LLMUnavailableError as e:
+        return jsonify({
+            "error": str(e),
+            "hint": "Make sure Ollama is running: ollama serve",
+        }), 503
+
+
+# ============================================
 # ROUTE REGISTRATION
 # ============================================
 
@@ -532,4 +591,5 @@ def register_routes(app: Flask) -> None:
     """Register all blueprints with the Flask app."""
     app.register_blueprint(workflows_bp)
     app.register_blueprint(executions_bp)
-    logger.info("Routes registered")
+    app.register_blueprint(ai_bp)
+    logger.info("Routes registered (including AI endpoint)")

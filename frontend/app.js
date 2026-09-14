@@ -35,9 +35,30 @@ async function apiRequest(endpoint, options = {}) {
         });
         
         if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            // Surface the server's explanation when there is one. Validation
+            // rejections from the AI endpoint say what was wrong with the
+            // generated workflow, which is the useful part for the user.
+            let detail = '';
+            try {
+                const body = await response.json();
+                if (body && body.error) {
+                    detail = typeof body.error === 'string'
+                        ? body.error
+                        : (body.error.message || '');
+                }
+                if (body && body.hint) {
+                    detail += ` (${body.hint})`;
+                }
+            } catch (e) {
+                // Non-JSON error body - fall back to the status alone.
+            }
+            throw new Error(
+                detail
+                    ? `HTTP error! status: ${response.status} - ${detail}`
+                    : `HTTP error! status: ${response.status}`
+            );
         }
-        
+
         return await response.json();
     } catch (error) {
         console.error(`API Error (${endpoint}):`, error);
@@ -370,7 +391,7 @@ async function createAndRunWorkflow(type) {
     
     const workflowName = `${config.name}-${Date.now()}`;
     
-    output.innerHTML = `<div class="output-box">🚀 Creating ${config.name}...\n\nSteps: ${config.steps.length}</div>`;
+    output.innerHTML = `<div class="output-box">Creating <strong>${config.name}</strong>...<br>Steps: ${config.steps.length}</div>`;
     
     try {
         // Step 1: Create workflow
@@ -381,9 +402,8 @@ async function createAndRunWorkflow(type) {
                 description: config.description 
             })
         });
-        
-        output.innerHTML = `<div class="output-box">✓ Created workflow: ${workflowName}\n\nAdding steps...</div>`;
-        
+        output.innerHTML = `<div class="output-box">Workflow <strong>${workflowName}</strong> created.<br>Adding steps...</div>`;
+
         // Step 2: Add all steps
         for (let i = 0; i < config.steps.length; i++) {
             const step = config.steps[i];
@@ -396,16 +416,15 @@ async function createAndRunWorkflow(type) {
                     config: step.config
                 })
             });
-            output.innerHTML = `<div class="output-box">✓ Created workflow: ${workflowName}\n✓ Added step ${i+1}/${config.steps.length}: ${step.name}\n\n${i < config.steps.length - 1 ? 'Adding more steps...' : 'Activating...'}</div>`;
+            output.innerHTML = `<div class="output-box">Workflow <strong>${workflowName}</strong> created.<br>Step ${i+1} of ${config.steps.length}: <strong>${step.name}</strong> added.<br>${i < config.steps.length - 1 ? 'Adding next step...' : 'Activating workflow...'}</div>`;
         }
-        
+
         // Step 3: Activate workflow
         await apiRequest(`/api/v1/workflows/${workflow.id}/activate`, {
             method: 'POST'
         });
-        
-        output.innerHTML = `<div class="output-box">✓ Created workflow: ${workflowName}\n✓ Added ${config.steps.length} step(s)\n✓ Activated!\n\n⏳ Executing workflow...</div>`;
-        
+        output.innerHTML = `<div class="output-box">Workflow <strong>${workflowName}</strong> activated.<br>Running workflow now...</div>`;
+
         // Step 4: Execute workflow
         const execution = await apiRequest('/api/v1/executions', {
             method: 'POST',
@@ -414,28 +433,181 @@ async function createAndRunWorkflow(type) {
                 idempotency_key: 'run-' + Date.now() 
             })
         });
-        
+
         // Step 5: Poll for completion
         let result = execution;
         for (let i = 0; i < 15; i++) {
             await sleep(1000);
             result = await apiRequest(`/api/v1/executions/${execution.id}`);
-            
             if (result.status === 'completed' || result.status === 'failed') {
                 break;
             }
-            
-            output.innerHTML = `<div class="output-box">✓ Created workflow: ${workflowName}\n✓ Added ${config.steps.length} step(s)\n✓ Activated!\n\n⏳ Running... (${i+1}s)</div>`;
+            output.innerHTML = `<div class="output-box">Workflow <strong>${workflowName}</strong> is running... (${i+1}s)</div>`;
         }
-        
+
         // Step 6: Show result
-        const statusEmoji = result.status === 'completed' ? '✅' : '❌';
-        output.innerHTML = `<div class="output-box">${statusEmoji} Workflow: ${workflowName}\n${statusEmoji} Status: ${result.status.toUpperCase()}\n\n📦 Output:\n${JSON.stringify(result.output_data, null, 2)}</div>`;
-        
+        let statusText = result.status === 'completed' ? 'Success!' : 'Failed';
+        output.innerHTML = `<div class="output-box"><strong>${statusText}</strong> Workflow: <strong>${workflowName}</strong><br>Status: <strong>${result.status.toUpperCase()}</strong><br><br>Output:<br><pre>${JSON.stringify(result.output_data, null, 2)}</pre></div>`;
+
         // Refresh the dashboard
         await loadData();
     } catch (error) {
-        output.innerHTML = `<div class="output-box error">❌ Error: ${error.message}</div>`;
+        output.innerHTML = `<div class="output-box error">Error: ${error.message}</div>`;
+    }
+}
+
+// Steps from the most recent AI generation, held here so they are passed to the
+// run handler by reference rather than being serialized through HTML.
+let lastGeneratedSteps = null;
+let lastGeneratedPrompt = '';
+
+/**
+ * Generates and optionally runs a workflow using AI
+ */
+async function generateAIWorkflow() {
+    const promptInput = document.getElementById('ai-prompt');
+    const output = document.getElementById('ai-output-area') || elements.outputArea;
+    const prompt = promptInput.value.trim();
+    
+    if (!prompt) {
+        output.innerHTML = '<div class="output-box error">Please enter a description of what you want to automate.</div>';
+        return;
+    }
+    
+    output.innerHTML = '<div class="output-box">🤖 AI is thinking...</div>';
+    
+    try {
+        // Call the AI endpoint
+        const result = await apiRequest('/api/v1/ai/generate-workflow', {
+            method: 'POST',
+            body: JSON.stringify({ prompt })
+        });
+        
+        if (!result.success || !result.steps || result.steps.length === 0) {
+            output.innerHTML = `<div class="output-box error">AI couldn't generate steps. Try a simpler prompt.</div>`;
+            return;
+        }
+        
+        const steps = result.steps;
+        
+        // Show the generated steps
+        // Hold the steps in JS rather than serializing them into markup. Model
+        // output is untrusted, so it must never be parsed as HTML or as JS source.
+        lastGeneratedSteps = steps;
+        lastGeneratedPrompt = prompt;
+
+        // Every interpolated field here is model-controlled, so all of it goes
+        // through escapeHtml and lands as text.
+        const stepsHtml = steps.map((s, i) =>
+            `<div class="step-item"><span class="step-number">${i+1}</span> <strong>${escapeHtml(s.name)}</strong>: ${escapeHtml(s.description || s.task_type)}</div>`
+        ).join('');
+
+        output.innerHTML = `
+            <div class="output-box">
+                <strong>AI Generated ${steps.length} step(s):</strong><br><br>
+                ${stepsHtml}
+                <br><br>
+                <button class="demo-btn" id="run-ai-workflow-btn" style="margin-top:10px;">
+                    ▶ Run This Workflow
+                </button>
+            </div>
+        `;
+
+        // Attach the handler to the element instead of embedding a call in an
+        // attribute, so the steps are passed by reference and never stringified.
+        const runBtn = document.getElementById('run-ai-workflow-btn');
+        if (runBtn) {
+            runBtn.addEventListener('click', () => {
+                runAIGeneratedWorkflow(lastGeneratedSteps, lastGeneratedPrompt);
+            });
+        }
+
+    } catch (error) {
+        if (error.message.includes('503') || error.message.includes('Connection')) {
+            output.innerHTML = `<div class="output-box error">AI model is not enabled on this setup right now. You can still use all the demo workflows above without AI.</div>`;
+        } else {
+            output.innerHTML = `<div class="output-box error">Error: ${error.message}</div>`;
+        }
+    }
+}
+
+/**
+ * Runs a workflow generated by AI
+ * @param {Array} steps - Array of step configurations
+ * @param {string} description - Original prompt description
+ */
+async function runAIGeneratedWorkflow(steps, description) {
+    const output = document.getElementById('ai-output-area') || elements.outputArea;
+    const workflowName = `ai-workflow-${Date.now()}`;
+    
+    output.innerHTML = `<div class="output-box">Creating workflow from AI steps...</div>`;
+    
+    try {
+        // Step 1: Create workflow
+        const workflow = await apiRequest('/api/v1/workflows', {
+            method: 'POST',
+            body: JSON.stringify({ 
+                name: workflowName, 
+                description: `AI Generated: ${description}`
+            })
+        });
+        
+        // Step 2: Add all steps
+        for (let i = 0; i < steps.length; i++) {
+            const step = steps[i];
+            await apiRequest(`/api/v1/workflows/${workflow.id}/steps`, {
+                method: 'POST',
+                body: JSON.stringify({ 
+                    name: step.name, 
+                    task_type: step.task_type || 'http_request', 
+                    step_order: i,
+                    config: step.config
+                })
+            });
+            output.innerHTML = `<div class="output-box">Added step ${i+1}/${steps.length}: <strong>${escapeHtml(step.name)}</strong></div>`;
+        }
+
+        // Step 3: Activate workflow
+        await apiRequest(`/api/v1/workflows/${workflow.id}/activate`, {
+            method: 'POST'
+        });
+        output.innerHTML = `<div class="output-box">Workflow activated. Running...</div>`;
+
+        // Step 4: Execute workflow
+        const execution = await apiRequest('/api/v1/executions', {
+            method: 'POST',
+            body: JSON.stringify({ 
+                workflow_id: workflow.id, 
+                idempotency_key: 'ai-run-' + Date.now() 
+            })
+        });
+
+        // Step 5: Poll for completion
+        let result = execution;
+        for (let i = 0; i < 20; i++) {
+            await sleep(1000);
+            result = await apiRequest(`/api/v1/executions/${execution.id}`);
+            if (result.status === 'completed' || result.status === 'failed') {
+                break;
+            }
+            output.innerHTML = `<div class="output-box">Running... (${i+1}s)</div>`;
+        }
+
+        // Step 6: Show result
+        const statusEmoji = result.status === 'completed' ? '✅' : '❌';
+        output.innerHTML = `
+            <div class="output-box">
+                <strong>${statusEmoji} ${result.status.toUpperCase()}</strong><br>
+                Workflow: <strong>${workflowName}</strong><br><br>
+                <strong>Output:</strong><br>
+                <pre>${JSON.stringify(result.output_data, null, 2)}</pre>
+            </div>
+        `;
+
+        // Refresh the dashboard
+        await loadData();
+    } catch (error) {
+        output.innerHTML = `<div class="output-box error">Error: ${error.message}</div>`;
     }
 }
 
@@ -454,6 +626,8 @@ function init() {
     window.runWorkflow = runWorkflow;
     window.createAndRunWorkflow = createAndRunWorkflow;
     window.loadData = loadData;
+    window.generateAIWorkflow = generateAIWorkflow;
+    window.runAIGeneratedWorkflow = runAIGeneratedWorkflow;
 }
 
 // Start the application when DOM is ready

@@ -1,4 +1,4 @@
 # Configuration module
-from .settings import Config, get_config
+from .settings import Config, TestConfig, get_config
 
-__all__ = ["Config", "get_config"]
+__all__ = ["Config", "TestConfig", "get_config"]

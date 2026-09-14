@@ -410,7 +410,9 @@ class TestHealthEndpoint:
         """Test /health when all services are healthy."""
         mock_db.health_check.return_value = True
         
-        with patch('src.api.app.TaskQueue') as mock_queue_class:
+        # create_app's health_check imports TaskQueue inside the function, so it
+        # is resolved from src.worker at call time - that is where it is patched.
+        with patch('src.worker.TaskQueue') as mock_queue_class:
             mock_queue_class.return_value.health_check.return_value = True
             
             response = client.get("/health")

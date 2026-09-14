@@ -8,8 +8,11 @@ The registry allows for dynamic handler registration.
 import logging
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional, Type
+from typing import Any, Dict, Iterable, Optional, Type
 import json
+
+from src.config import get_config
+from .url_guard import validate_url
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +90,7 @@ class TaskHandlerRegistry:
 class HttpRequestHandler(TaskHandler):
     """
     Handler for HTTP request tasks.
-    
+
     Config schema:
     {
         "url": "https://api.example.com/endpoint",
@@ -96,12 +99,30 @@ class HttpRequestHandler(TaskHandler):
         "body": {...} | null,
         "expected_status": [200, 201]
     }
+
+    URLs are validated against a hostname allowlist before the request is made.
+    See src/services/url_guard.py for what is enforced and why.
     """
-    
+
+    def __init__(self, allowed_hosts: Optional[Iterable[str]] = None):
+        """
+        Args:
+            allowed_hosts: Permitted hostnames. Defaults to Config.ALLOWED_HTTP_HOSTS.
+                Injected explicitly in tests so validation runs without network access.
+        """
+        self._allowed_hosts = allowed_hosts
+
+    @property
+    def allowed_hosts(self) -> Iterable[str]:
+        """Resolve the allowlist lazily so config is read at call time, not import time."""
+        if self._allowed_hosts is None:
+            return get_config().ALLOWED_HTTP_HOSTS
+        return self._allowed_hosts
+
     @property
     def task_type(self) -> str:
         return "http_request"
-    
+
     def execute(
         self,
         step_config: Dict[str, Any],
@@ -109,19 +130,24 @@ class HttpRequestHandler(TaskHandler):
         timeout: int = 300,
     ) -> Optional[Dict[str, Any]]:
         import requests
-        
+
         url = step_config.get("url")
         method = step_config.get("method", "GET").upper()
         headers = step_config.get("headers", {})
         body = step_config.get("body")
         expected_status = step_config.get("expected_status", [200, 201, 204])
-        
+
         # Support template substitution in URL
-        if "{" in url:
+        if url and "{" in url:
             url = url.format(**input_data)
-        
+
+        # Validate after substitution, so a template cannot smuggle a blocked
+        # host past the check via input data. Raises BlockedUrlError, which the
+        # orchestrator handles on its normal step-failure path.
+        validate_url(url, self.allowed_hosts)
+
         logger.info(f"Making {method} request to {url}")
-        
+
         response = requests.request(
             method=method,
             url=url,
