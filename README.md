@@ -1,6 +1,10 @@
-# Workflow Orchestration Engine
+# Airlock: Workflow Orchestration Engine
 
 This is a real backend system for running multi-step workflows with retries, failure recovery, and audit logging. Built with Python, Flask, PostgreSQL, Redis, and Docker. Comes with a visual dashboard and a one-command demo script!
+
+It also deploys to Azure Container Apps with one command (see Azure Deployment below).
+
+![Dashboard running on Azure Container Apps](docs/dashboard.png)
 
 ---
 
@@ -131,6 +135,63 @@ AI-generated content never passes through HTML parsing. Generated steps are held
 JavaScript variable and the run handler is attached with `addEventListener`, rather than being
 serialized into an inline `onclick` attribute. All model-supplied text is escaped before display.
 
+### 6. Public deployment hardening
+
+When the engine runs on the public internet, a few more layers apply:
+
+- **Write access needs a key.** `POST` requests require an `X-API-Key` header; reading stays public.
+  In production the app refuses to start without a key, so a misconfigured deploy fails closed.
+- **No redirects, bounded responses.** `http_request` steps never follow redirects (an allowlisted
+  host could otherwise bounce the engine to an internal address), bodies are capped at 1 MB,
+  and requests time out after 30 seconds.
+- **Rate limits per client.** 30 writes and 120 requests per minute per IP, stored in Redis so the
+  limit is shared across server processes. Client IPs come from exactly one trusted proxy hop.
+- **Browser protections.** A Content-Security-Policy allows only same-origin scripts (no inline
+  script at all), plus `X-Frame-Options`, `nosniff`, and CORS disabled in the cloud.
+- **Bounded input.** Request bodies are capped at 256 KB and list endpoints at 1000 rows.
+
+---
+
+## ☁️ Azure Deployment
+
+The whole deployment is code: [`infra/main.bicep`](infra/main.bicep) describes it and
+[`infra/deploy.sh`](infra/deploy.sh) runs it.
+
+```
+GitHub push → GitHub Actions: 247 offline tests → images to GHCR
+                                                       ↓
+Azure Container Apps (one app, scales to zero)    ←  pulls images
+ ├── init: migrate   (applies pending SQL migrations, then exits)
+ ├── api             (gunicorn + dashboard)
+ ├── worker          (runs workflow steps)
+ └── redis           (queue + rate-limit counters, localhost only)
+          ↓ TLS
+Azure Database for PostgreSQL Flexible Server (B1ms)
+```
+
+Design choices, mostly driven by keeping it free on a student subscription:
+
+- **One Container App, three containers.** The worker and Redis run beside the API, and the app
+  scales to zero when idle, so it only uses the monthly free compute grant while in use.
+  The environment is pinned to `WorkloadProfiles` mode, because the default Express mode
+  doesn't allow sidecar or init containers.
+- **Images on GitHub Container Registry** instead of Azure Container Registry (no monthly fee).
+- **Migrations on every deploy.** An init container runs `python -m src.persistence.migrate`,
+  which records applied files in `schema_migrations` and holds an advisory lock, so re-runs are safe.
+- **Secrets stay out of git and images.** `deploy.sh` generates the database password, Flask
+  secret, and admin key into a git-ignored file; `.dockerignore` keeps them out of images.
+- **The AI generator is off in the cloud** (`LLM_ENABLED=false`), since there's no Ollama server.
+
+Known trade-offs: the database firewall allows Azure services (a private network costs extra),
+the app connects as the database admin, and queued jobs in Redis don't survive a restart
+(PostgreSQL remains the source of truth).
+
+```bash
+az login
+./infra/deploy.sh                       # prints the app URL
+az group delete -n airlock-rg --yes     # tears everything down
+```
+
 ---
 
 ## 📁 Project Structure
@@ -141,6 +202,9 @@ workflow-orchestration-engine/
 ├── frontend/      # Dashboard (HTML, JS, CSS)
 ├── tests/         # Unit and integration tests
 ├── migrations/    # SQL migrations
+├── infra/         # Azure deployment (Bicep + deploy script)
+├── .github/       # CI: tests, then image builds
+├── docs/          # Screenshots
 ├── Dockerfile*    # Docker setup
 ├── docker-compose.yml
 └── demo.sh        # One-command demo script
