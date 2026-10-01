@@ -111,10 +111,21 @@ var databaseUrl = 'postgresql://${postgresAdmin}:${postgresPassword}@${postgres.
 // CONTAINER APPS
 // ============================================
 
-resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
+// Set explicitly: new environments otherwise default to Express mode, which
+// supports neither sidecars (worker and Redis run beside the API) nor init
+// containers (migrations). Only the Consumption profile is defined, so there
+// is no dedicated, always-billed compute.
+resource environment 'Microsoft.App/managedEnvironments@2026-07-01' = {
   name: '${namePrefix}-env-${suffix}'
   location: location
   properties: {
+    environmentMode: 'WorkloadProfiles'
+    workloadProfiles: [
+      {
+        name: 'Consumption'
+        workloadProfileType: 'Consumption'
+      }
+    ]
     appLogsConfiguration: {
       destination: 'log-analytics'
       logAnalyticsConfiguration: {
@@ -148,6 +159,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
   ]
   properties: {
     managedEnvironmentId: environment.id
+    workloadProfileName: 'Consumption'
     configuration: {
       activeRevisionsMode: 'Single'
       ingress: {
