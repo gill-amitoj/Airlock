@@ -41,32 +41,32 @@
             <p class="info-box">One click = Create workflow → Run it → See results. No setup needed!</p>
             
             <div class="demo-grid">
-                <button class="demo-btn" onclick="createAndRunWorkflow('joke')">
+                <button class="demo-btn" data-demo="joke">
                     <span class="demo-icon">😂</span>
                     <span class="demo-title">Random Joke</span>
                     <span class="demo-desc">Fetch a joke from the web</span>
                 </button>
                 
-                <button class="demo-btn" onclick="createAndRunWorkflow('user')">
+                <button class="demo-btn" data-demo="user">
                     <span class="demo-icon">👤</span>
                     <span class="demo-title">Get User</span>
                     <span class="demo-desc">Fetch fake user data</span>
                 </button>
                 
-                <button class="demo-btn" onclick="createAndRunWorkflow('cat')">
+                <button class="demo-btn" data-demo="cat">
                     <span class="demo-icon">🐱</span>
                     <span class="demo-title">Cat Fact</span>
                     <span class="demo-desc">Random cat fact</span>
                 </button>
                 
-                <button class="demo-btn" onclick="createAndRunWorkflow('todo')">
+                <button class="demo-btn" data-demo="todo">
                     <span class="demo-icon">✅</span>
                     <span class="demo-title">Get Todo</span>
                     <span class="demo-desc">Fetch a todo item</span>
                 </button>
             </div>
             
-            <button class="demo-btn multi-step" onclick="createAndRunWorkflow('multi')">
+            <button class="demo-btn multi-step" data-demo="multi">
                 <span class="demo-icon">🔗</span>
                 <span class="demo-title">Multi-Step Workflow</span>
                 <span class="demo-desc">3 steps chained together: Joke → User → Post</span>
@@ -80,8 +80,8 @@
             <h2>🤖 AI Workflow Builder <span class="badge-new">New</span></h2>
             <p class="info-box">Describe what you want to automate in plain English, and AI will build the workflow for you.</p>
             <div class="ai-input-container">
-                <input type="text" id="ai-prompt" class="ai-input" placeholder="e.g., 'Fetch a random joke and a cat fact'" onkeypress="if(event.key==='Enter') generateAIWorkflow()">
-                <button class="ai-btn" onclick="generateAIWorkflow()">Generate Workflow</button>
+                <input type="text" id="ai-prompt" class="ai-input" placeholder="e.g., 'Fetch a random joke and a cat fact'">
+                <button class="ai-btn" id="ai-generate-btn">Generate Workflow</button>
             </div>
             <p class="ai-hint">💡 Try: "Get a joke" • "Fetch user data and a random quote" • "Get weather for London"</p>
             <div id="ai-output-area"></div>
@@ -90,7 +90,7 @@
         <!-- Workflows Section - History -->
         <div class="section">
             <h2>📋 Your Workflows 
-                <button class="refresh-btn" onclick="loadData()">↻ Refresh</button>
+                <button class="refresh-btn" id="refresh-btn">↻ Refresh</button>
             </h2>
             <div id="workflows-list">
                 <div class="loading">Loading...</div>
@@ -109,7 +109,7 @@
     <footer>
         <p>Built with ❤️ for learning and automation</p>
         <p class="footer-links">
-            <a href="https://github.com/gill-amitoj/WorkflowOrchestrationSystem" target="_blank">GitHub</a> •
+            <a href="https://github.com/gill-amitoj/airlock" target="_blank">GitHub</a> •
             <span>Open Source & Free</span>
         </p>
     </footer>

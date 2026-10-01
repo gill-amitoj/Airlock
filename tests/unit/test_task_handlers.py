@@ -3,6 +3,7 @@ Unit tests for task handlers.
 """
 
 import pytest
+import responses
 from unittest.mock import patch, MagicMock
 
 from src.services.task_handlers import (
@@ -13,6 +14,9 @@ from src.services.task_handlers import (
     ConditionalHandler,
     LogHandler,
     create_default_registry,
+    MAX_ERROR_BODY_CHARS,
+    MAX_REQUEST_TIMEOUT,
+    MAX_RESPONSE_BYTES,
 )
 from src.services.url_guard import BlockedUrlError
 
@@ -335,14 +339,11 @@ class TestHttpRequestHandler:
         handler = HttpRequestHandler()
         assert handler.task_type == "http_request"
 
-    @patch("requests.request")
-    def test_execute_get_request(self, mock_request):
+    @responses.activate
+    def test_execute_get_request(self):
         """Test GET request execution."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"data": "test"}
-        mock_request.return_value = mock_response
-        
+        responses.get("https://api.example.com/test", json={"data": "test"})
+
         handler = HttpRequestHandler(allowed_hosts=self.ALLOWED)
         result = handler.execute(
             step_config={
@@ -351,19 +352,21 @@ class TestHttpRequestHandler:
             },
             input_data={},
         )
-        
-        mock_request.assert_called_once()
+
+        assert len(responses.calls) == 1
         assert result["status_code"] == 200
         assert result["response"]["data"] == "test"
-    
-    @patch("requests.request")
-    def test_execute_post_request(self, mock_request):
+
+    @responses.activate
+    def test_execute_post_request(self):
         """Test POST request execution."""
-        mock_response = MagicMock()
-        mock_response.status_code = 201
-        mock_response.json.return_value = {"id": "123"}
-        mock_request.return_value = mock_response
-        
+        responses.post(
+            "https://api.example.com/create",
+            json={"id": "123"},
+            status=201,
+            match=[responses.matchers.json_params_matcher({"name": "test"})],
+        )
+
         handler = HttpRequestHandler(allowed_hosts=self.ALLOWED)
         result = handler.execute(
             step_config={
@@ -373,20 +376,15 @@ class TestHttpRequestHandler:
             },
             input_data={},
         )
-        
-        mock_request.assert_called_once()
-        call_args = mock_request.call_args
-        assert call_args.kwargs["method"] == "POST"
-        assert call_args.kwargs["json"] == {"name": "test"}
-    
-    @patch("requests.request")
-    def test_execute_with_url_template(self, mock_request):
+
+        assert result["status_code"] == 201
+        assert result["response"] == {"id": "123"}
+
+    @responses.activate
+    def test_execute_with_url_template(self):
         """Test URL template substitution."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {}
-        mock_request.return_value = mock_response
-        
+        responses.get("https://api.example.com/users/456", json={})
+
         handler = HttpRequestHandler(allowed_hosts=self.ALLOWED)
         handler.execute(
             step_config={
@@ -395,18 +393,27 @@ class TestHttpRequestHandler:
             },
             input_data={"user_id": "456"},
         )
-        
-        call_args = mock_request.call_args
-        assert call_args.kwargs["url"] == "https://api.example.com/users/456"
-    
-    @patch("requests.request")
-    def test_execute_unexpected_status(self, mock_request):
+
+        assert responses.calls[0].request.url == "https://api.example.com/users/456"
+
+    @responses.activate
+    def test_execute_non_json_response(self):
+        """A non-JSON body is returned as text."""
+        responses.get("https://api.example.com/plain", body="hello")
+
+        handler = HttpRequestHandler(allowed_hosts=self.ALLOWED)
+        result = handler.execute(
+            step_config={"url": "https://api.example.com/plain"},
+            input_data={},
+        )
+
+        assert result["response"] == {"text": "hello"}
+
+    @responses.activate
+    def test_execute_unexpected_status(self):
         """Test handling of unexpected status codes."""
-        mock_response = MagicMock()
-        mock_response.status_code = 500
-        mock_response.text = "Internal Server Error"
-        mock_request.return_value = mock_response
-        
+        responses.get("https://api.example.com/error", body="Internal Server Error", status=500)
+
         handler = HttpRequestHandler(allowed_hosts=self.ALLOWED)
 
         with pytest.raises(Exception, match="HTTP request failed"):
@@ -417,6 +424,67 @@ class TestHttpRequestHandler:
                 },
                 input_data={},
             )
+
+    @responses.activate
+    def test_error_body_truncated(self):
+        """Error messages carry at most MAX_ERROR_BODY_CHARS of the body."""
+        responses.get("https://api.example.com/error", body="x" * 10_000, status=500)
+
+        handler = HttpRequestHandler(allowed_hosts=self.ALLOWED)
+
+        with pytest.raises(Exception) as exc_info:
+            handler.execute(step_config={"url": "https://api.example.com/error"}, input_data={})
+
+        assert len(str(exc_info.value)) < MAX_ERROR_BODY_CHARS + 100
+
+    @responses.activate
+    def test_redirect_not_followed(self):
+        """An allowlisted host cannot redirect the engine to an internal address."""
+        responses.get(
+            "https://api.example.com/redirect",
+            status=302,
+            headers={"Location": "http://169.254.169.254/metadata"},
+        )
+
+        handler = HttpRequestHandler(allowed_hosts=self.ALLOWED)
+
+        with pytest.raises(Exception, match="redirects are not followed"):
+            handler.execute(
+                step_config={"url": "https://api.example.com/redirect"},
+                input_data={},
+            )
+
+        # Only the original request was made; the Location was never fetched.
+        assert len(responses.calls) == 1
+
+    @responses.activate
+    def test_oversized_response_rejected(self):
+        """Bodies over MAX_RESPONSE_BYTES are refused rather than buffered."""
+        responses.get("https://api.example.com/big", body=b"x" * (MAX_RESPONSE_BYTES + 1))
+
+        handler = HttpRequestHandler(allowed_hosts=self.ALLOWED)
+
+        with pytest.raises(Exception, match="byte limit"):
+            handler.execute(step_config={"url": "https://api.example.com/big"}, input_data={})
+
+    @patch("requests.request")
+    def test_request_options_bound_timeout_and_redirects(self, mock_request):
+        """Every request is streamed, never follows redirects, and has a capped timeout."""
+        mock_request.return_value.status_code = 200
+        mock_request.return_value.encoding = "utf-8"
+        mock_request.return_value.iter_content.return_value = [b"{}"]
+
+        handler = HttpRequestHandler(allowed_hosts=self.ALLOWED)
+        handler.execute(
+            step_config={"url": "https://api.example.com/x"},
+            input_data={},
+            timeout=3600,
+        )
+
+        kwargs = mock_request.call_args.kwargs
+        assert kwargs["allow_redirects"] is False
+        assert kwargs["stream"] is True
+        assert kwargs["timeout"] == MAX_REQUEST_TIMEOUT
 
     @patch("requests.request")
     def test_blocked_host_raises_before_request(self, mock_request):
@@ -472,13 +540,10 @@ class TestHttpRequestHandler:
 
         mock_request.assert_not_called()
 
-    @patch("requests.request")
-    def test_default_allowlist_comes_from_config(self, mock_request):
+    @responses.activate
+    def test_default_allowlist_comes_from_config(self):
         """With no injection, the handler enforces the configured allowlist."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"fact": "cats sleep a lot"}
-        mock_request.return_value = mock_response
+        responses.get("https://catfact.ninja/fact", json={"fact": "cats sleep a lot"})
 
         handler = HttpRequestHandler()
 

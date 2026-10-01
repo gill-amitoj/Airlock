@@ -46,6 +46,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: workflow-api
+    command: python -m flask run --host=0.0.0.0
     ports:
       - "5001:5000"
     environment:

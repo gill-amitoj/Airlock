@@ -14,6 +14,13 @@ import json
 from src.config import get_config
 from .url_guard import validate_url
 
+# Limits on outbound http_request steps. Responses are buffered into step
+# output and stored in PostgreSQL, so an unbounded body is a memory and
+# storage exhaustion vector.
+MAX_RESPONSE_BYTES = 1_000_000
+MAX_REQUEST_TIMEOUT = 30  # seconds, regardless of the step's own timeout
+MAX_ERROR_BODY_CHARS = 500
+
 logger = logging.getLogger(__name__)
 
 
@@ -148,28 +155,57 @@ class HttpRequestHandler(TaskHandler):
 
         logger.info(f"Making {method} request to {url}")
 
+        # Redirects are not followed: validation covered this URL only, and an
+        # allowlisted host could redirect to an internal address.
         response = requests.request(
             method=method,
             url=url,
             headers=headers,
             json=body if body else None,
-            timeout=timeout,
+            timeout=min(timeout, MAX_REQUEST_TIMEOUT),
+            allow_redirects=False,
+            stream=True,
         )
-        
-        if response.status_code not in expected_status:
-            raise Exception(
-                f"HTTP request failed with status {response.status_code}: {response.text}"
-            )
-        
         try:
-            response_data = response.json()
+            content = self._read_capped(response)
+        finally:
+            response.close()
+        text = content.decode(response.encoding or "utf-8", errors="replace")
+
+        if response.status_code not in expected_status:
+            if 300 <= response.status_code < 400:
+                raise Exception(
+                    f"HTTP request failed with status {response.status_code}: "
+                    f"redirects are not followed"
+                )
+            raise Exception(
+                f"HTTP request failed with status {response.status_code}: "
+                f"{text[:MAX_ERROR_BODY_CHARS]}"
+            )
+
+        try:
+            response_data = json.loads(text)
         except json.JSONDecodeError:
-            response_data = {"text": response.text}
-        
+            response_data = {"text": text}
+
         return {
             "status_code": response.status_code,
             "response": response_data,
         }
+
+    @staticmethod
+    def _read_capped(response) -> bytes:
+        """Read the body, refusing anything over MAX_RESPONSE_BYTES."""
+        chunks = []
+        total = 0
+        for chunk in response.iter_content(chunk_size=65536):
+            total += len(chunk)
+            if total > MAX_RESPONSE_BYTES:
+                raise Exception(
+                    f"HTTP response exceeded the {MAX_RESPONSE_BYTES} byte limit"
+                )
+            chunks.append(chunk)
+        return b"".join(chunks)
 
 
 class DataTransformHandler(TaskHandler):

@@ -4,7 +4,9 @@
  */
 
 // API Configuration
-const API_BASE_URL = 'http://localhost:5001';
+// Opened as a file: talk to the local docker compose API.
+// Served by Flask (e.g. the Azure deployment): use the same origin.
+const API_BASE_URL = window.location.protocol === 'file:' ? 'http://localhost:5001' : '';
 
 // DOM Elements Cache
 const elements = {
@@ -18,22 +20,57 @@ const elements = {
     outputArea: document.getElementById('output-area')
 };
 
+// The admin key lives in sessionStorage: it survives reloads but not closing
+// the tab. Storage can throw (private mode, blocked site data), so every
+// access is guarded and a failure just means "no key".
+const API_KEY_STORAGE = 'workflowEngineApiKey';
+
+let apiKeyInMemory = null;
+
+function getApiKey() {
+    if (apiKeyInMemory) return apiKeyInMemory;
+    try { return sessionStorage.getItem(API_KEY_STORAGE); } catch (e) { return null; }
+}
+
+function clearApiKey() {
+    apiKeyInMemory = null;
+    try { sessionStorage.removeItem(API_KEY_STORAGE); } catch (e) { /* ignore */ }
+}
+
+function promptForApiKey() {
+    const key = (window.prompt('Enter the admin key to create and run workflows:') || '').trim();
+    if (!key) return false;
+    apiKeyInMemory = key;
+    try { sessionStorage.setItem(API_KEY_STORAGE, key); } catch (e) { /* memory copy still works */ }
+    return true;
+}
+
 /**
  * Makes an API request with error handling
  * @param {string} endpoint - API endpoint
  * @param {object} options - Fetch options
  * @returns {Promise<object>} - Response data
  */
-async function apiRequest(endpoint, options = {}) {
+async function apiRequest(endpoint, options = {}, isRetry = false) {
     try {
-        const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-            headers: {
-                'Content-Type': 'application/json',
-                ...options.headers
-            },
-            ...options
-        });
-        
+        const { headers: extraHeaders, ...fetchOptions } = options;
+        const headers = { 'Content-Type': 'application/json', ...extraHeaders };
+        const apiKey = getApiKey();
+        if (apiKey && fetchOptions.method && fetchOptions.method !== 'GET') {
+            headers['X-API-Key'] = apiKey;
+        }
+
+        const response = await fetch(`${API_BASE_URL}${endpoint}`, { ...fetchOptions, headers });
+
+        // Writes on a deployed instance need the admin key: ask once, then retry.
+        if (response.status === 401 && !isRetry) {
+            clearApiKey();
+            if (promptForApiKey()) {
+                return apiRequest(endpoint, options, true);
+            }
+            throw new Error('This demo is view-only. Creating and running workflows needs the admin key.');
+        }
+
         if (!response.ok) {
             // Surface the server's explanation when there is one. Validation
             // rejections from the AI endpoint say what was wrong with the
@@ -87,7 +124,7 @@ function renderWorkflowCard(workflow) {
             ${workflow.steps.map((step, index) => `
                 <div class="step-item">
                     <span class="step-number">${index + 1}</span>
-                    <span><strong>${step.name}</strong> → ${step.task_type}</span>
+                    <span><strong>${escapeHtml(step.name)}</strong> → ${escapeHtml(step.task_type)}</span>
                 </div>
             `).join('')}
            </div>`
@@ -95,8 +132,8 @@ function renderWorkflowCard(workflow) {
     
     return `
         <div class="workflow-card">
-            <h4>${escapeHtml(workflow.name)} <span class="status-badge ${workflow.status}">${workflow.status}</span></h4>
-            <div class="meta">ID: ${workflow.id}</div>
+            <h4>${escapeHtml(workflow.name)} <span class="status-badge ${escapeHtml(workflow.status)}">${escapeHtml(workflow.status)}</span></h4>
+            <div class="meta">ID: ${escapeHtml(workflow.id)}</div>
             <div class="meta">${escapeHtml(workflow.description) || 'No description'}</div>
             ${stepsHtml}
         </div>
@@ -123,9 +160,9 @@ function renderExecutionCard(execution) {
     
     return `
         <div class="execution-card">
-            <h4>Execution <span class="status-badge ${execution.status}">${execution.status}</span></h4>
-            <div class="meta">ID: ${execution.id}</div>
-            <div class="meta">Started: ${startedAt}</div>
+            <h4>Execution <span class="status-badge ${escapeHtml(execution.status)}">${escapeHtml(execution.status)}</span></h4>
+            <div class="meta">ID: ${escapeHtml(execution.id)}</div>
+            <div class="meta">Started: ${escapeHtml(startedAt)}</div>
             ${completedHtml}
             ${errorHtml}
         </div>
@@ -138,10 +175,11 @@ function renderExecutionCard(execution) {
  * @returns {string} - Escaped text
  */
 function escapeHtml(text) {
-    if (!text) return '';
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+    if (text === null || text === undefined) return '';
+    // Quotes too, so the result is also safe inside attribute values.
+    return String(text).replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[c]));
 }
 
 /**
@@ -218,12 +256,12 @@ async function createDemoWorkflow() {
             method: 'POST'
         });
         
-        output.innerHTML = `<div class="output-box">✓ Created workflow: ${workflow.name}\n✓ Added step: fetch_joke\n✓ Activated!\n\nWorkflow ID: ${workflow.id}</div>`;
+        output.innerHTML = `<div class="output-box">✓ Created workflow: ${escapeHtml(workflow.name)}\n✓ Added step: fetch_joke\n✓ Activated!\n\nWorkflow ID: ${escapeHtml(workflow.id)}</div>`;
         
         // Refresh the dashboard
         await loadData();
     } catch (error) {
-        output.innerHTML = `<div class="output-box error">Error: ${error.message}</div>`;
+        output.innerHTML = `<div class="output-box error">Error: ${escapeHtml(error.message)}</div>`;
     }
 }
 
@@ -244,7 +282,7 @@ async function runWorkflow() {
         }
         
         const workflow = workflows.workflows[0];
-        output.innerHTML = `<div class="output-box">Running workflow: ${workflow.name}...</div>`;
+        output.innerHTML = `<div class="output-box">Running workflow: ${escapeHtml(workflow.name)}...</div>`;
         
         // Create execution
         const execution = await apiRequest('/api/v1/executions', {
@@ -266,12 +304,12 @@ async function runWorkflow() {
             }
         }
         
-        output.innerHTML = `<div class="output-box">Workflow: ${workflow.name}\nStatus: ${result.status.toUpperCase()}\n\nOutput:\n${JSON.stringify(result.output_data, null, 2)}</div>`;
+        output.innerHTML = `<div class="output-box">Workflow: ${escapeHtml(workflow.name)}\nStatus: ${escapeHtml(result.status.toUpperCase())}\n\nOutput:\n${escapeHtml(JSON.stringify(result.output_data, null, 2))}</div>`;
         
         // Refresh the dashboard
         await loadData();
     } catch (error) {
-        output.innerHTML = `<div class="output-box error">Error: ${error.message}</div>`;
+        output.innerHTML = `<div class="output-box error">Error: ${escapeHtml(error.message)}</div>`;
     }
 }
 
@@ -389,9 +427,9 @@ async function createAndRunWorkflow(type) {
         return;
     }
     
-    const workflowName = `${config.name}-${Date.now()}`;
+    const workflowName = `${escapeHtml(config.name)}-${Date.now()}`;
     
-    output.innerHTML = `<div class="output-box">Creating <strong>${config.name}</strong>...<br>Steps: ${config.steps.length}</div>`;
+    output.innerHTML = `<div class="output-box">Creating <strong>${escapeHtml(config.name)}</strong>...<br>Steps: ${config.steps.length}</div>`;
     
     try {
         // Step 1: Create workflow
@@ -402,7 +440,7 @@ async function createAndRunWorkflow(type) {
                 description: config.description 
             })
         });
-        output.innerHTML = `<div class="output-box">Workflow <strong>${workflowName}</strong> created.<br>Adding steps...</div>`;
+        output.innerHTML = `<div class="output-box">Workflow <strong>${escapeHtml(workflowName)}</strong> created.<br>Adding steps...</div>`;
 
         // Step 2: Add all steps
         for (let i = 0; i < config.steps.length; i++) {
@@ -416,14 +454,14 @@ async function createAndRunWorkflow(type) {
                     config: step.config
                 })
             });
-            output.innerHTML = `<div class="output-box">Workflow <strong>${workflowName}</strong> created.<br>Step ${i+1} of ${config.steps.length}: <strong>${step.name}</strong> added.<br>${i < config.steps.length - 1 ? 'Adding next step...' : 'Activating workflow...'}</div>`;
+            output.innerHTML = `<div class="output-box">Workflow <strong>${escapeHtml(workflowName)}</strong> created.<br>Step ${i+1} of ${config.steps.length}: <strong>${escapeHtml(step.name)}</strong> added.<br>${i < config.steps.length - 1 ? 'Adding next step...' : 'Activating workflow...'}</div>`;
         }
 
         // Step 3: Activate workflow
         await apiRequest(`/api/v1/workflows/${workflow.id}/activate`, {
             method: 'POST'
         });
-        output.innerHTML = `<div class="output-box">Workflow <strong>${workflowName}</strong> activated.<br>Running workflow now...</div>`;
+        output.innerHTML = `<div class="output-box">Workflow <strong>${escapeHtml(workflowName)}</strong> activated.<br>Running workflow now...</div>`;
 
         // Step 4: Execute workflow
         const execution = await apiRequest('/api/v1/executions', {
@@ -442,17 +480,17 @@ async function createAndRunWorkflow(type) {
             if (result.status === 'completed' || result.status === 'failed') {
                 break;
             }
-            output.innerHTML = `<div class="output-box">Workflow <strong>${workflowName}</strong> is running... (${i+1}s)</div>`;
+            output.innerHTML = `<div class="output-box">Workflow <strong>${escapeHtml(workflowName)}</strong> is running... (${i+1}s)</div>`;
         }
 
         // Step 6: Show result
         let statusText = result.status === 'completed' ? 'Success!' : 'Failed';
-        output.innerHTML = `<div class="output-box"><strong>${statusText}</strong> Workflow: <strong>${workflowName}</strong><br>Status: <strong>${result.status.toUpperCase()}</strong><br><br>Output:<br><pre>${JSON.stringify(result.output_data, null, 2)}</pre></div>`;
+        output.innerHTML = `<div class="output-box"><strong>${statusText}</strong> Workflow: <strong>${escapeHtml(workflowName)}</strong><br>Status: <strong>${escapeHtml(result.status.toUpperCase())}</strong><br><br>Output:<br><pre>${escapeHtml(JSON.stringify(result.output_data, null, 2))}</pre></div>`;
 
         // Refresh the dashboard
         await loadData();
     } catch (error) {
-        output.innerHTML = `<div class="output-box error">Error: ${error.message}</div>`;
+        output.innerHTML = `<div class="output-box error">Error: ${escapeHtml(error.message)}</div>`;
     }
 }
 
@@ -526,7 +564,7 @@ async function generateAIWorkflow() {
         if (error.message.includes('503') || error.message.includes('Connection')) {
             output.innerHTML = `<div class="output-box error">AI model is not enabled on this setup right now. You can still use all the demo workflows above without AI.</div>`;
         } else {
-            output.innerHTML = `<div class="output-box error">Error: ${error.message}</div>`;
+            output.innerHTML = `<div class="output-box error">Error: ${escapeHtml(error.message)}</div>`;
         }
     }
 }
@@ -597,17 +635,17 @@ async function runAIGeneratedWorkflow(steps, description) {
         const statusEmoji = result.status === 'completed' ? '✅' : '❌';
         output.innerHTML = `
             <div class="output-box">
-                <strong>${statusEmoji} ${result.status.toUpperCase()}</strong><br>
-                Workflow: <strong>${workflowName}</strong><br><br>
+                <strong>${statusEmoji} ${escapeHtml(result.status.toUpperCase())}</strong><br>
+                Workflow: <strong>${escapeHtml(workflowName)}</strong><br><br>
                 <strong>Output:</strong><br>
-                <pre>${JSON.stringify(result.output_data, null, 2)}</pre>
+                <pre>${escapeHtml(JSON.stringify(result.output_data, null, 2))}</pre>
             </div>
         `;
 
         // Refresh the dashboard
         await loadData();
     } catch (error) {
-        output.innerHTML = `<div class="output-box error">Error: ${error.message}</div>`;
+        output.innerHTML = `<div class="output-box error">Error: ${escapeHtml(error.message)}</div>`;
     }
 }
 
@@ -621,13 +659,16 @@ function init() {
     // Set up auto-refresh every 10 seconds
     setInterval(loadData, 10000);
     
-    // Expose functions globally for button onclick handlers
-    window.createDemoWorkflow = createDemoWorkflow;
-    window.runWorkflow = runWorkflow;
-    window.createAndRunWorkflow = createAndRunWorkflow;
-    window.loadData = loadData;
-    window.generateAIWorkflow = generateAIWorkflow;
-    window.runAIGeneratedWorkflow = runAIGeneratedWorkflow;
+    // Handlers are attached here rather than as inline onclick attributes, so
+    // the Content-Security-Policy can forbid inline script entirely.
+    document.querySelectorAll('[data-demo]').forEach(btn => {
+        btn.addEventListener('click', () => createAndRunWorkflow(btn.dataset.demo));
+    });
+    document.getElementById('ai-generate-btn').addEventListener('click', generateAIWorkflow);
+    document.getElementById('ai-prompt').addEventListener('keydown', event => {
+        if (event.key === 'Enter') generateAIWorkflow();
+    });
+    document.getElementById('refresh-btn').addEventListener('click', loadData);
 }
 
 // Start the application when DOM is ready

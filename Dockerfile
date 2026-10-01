@@ -39,5 +39,5 @@ USER appuser
 # Expose port
 EXPOSE 5000
 
-# Default command (can be overridden)
-CMD ["python", "-m", "flask", "run", "--host=0.0.0.0"]
+# Production server; docker-compose overrides this with the Flask dev server
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--access-logfile", "-", "src.api.app:create_app()"]

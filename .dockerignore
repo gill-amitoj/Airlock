@@ -1,0 +1,12 @@
+# Keep secrets, VCS data and dev artefacts out of images
+.git
+.github
+.env
+*.local
+infra
+tests
+.pytest_cache
+**/__pycache__
+*.py[cod]
+venv
+.venv

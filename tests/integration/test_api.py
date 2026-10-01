@@ -431,3 +431,35 @@ class TestHealthEndpoint:
         data = json.loads(response.data)
         assert data["status"] == "unhealthy"
         assert data["database"] == "unhealthy"
+
+
+class TestAIEndpointDisabled:
+    """Tests for the AI generator when LLM_ENABLED is off (cloud deployment)."""
+
+    def test_generate_workflow_disabled(self, client, app):
+        """The endpoint refuses before touching the LLM when disabled."""
+        app.config["APP_CONFIG"].LLM_ENABLED = False
+
+        with patch('src.api.routes.get_workflow_generation_service') as mock_service:
+            response = client.post(
+                "/api/v1/ai/generate-workflow",
+                json={"prompt": "Get a cat fact"},
+            )
+
+            assert response.status_code == 503
+            assert "disabled" in json.loads(response.data)["error"]
+            mock_service.assert_not_called()
+
+
+class TestDashboard:
+    """The API serves the dashboard from its own origin."""
+
+    def test_root_serves_dashboard(self, client):
+        response = client.get("/")
+
+        assert response.status_code == 200
+        assert b"app.js" in response.data
+
+    def test_dashboard_assets_served(self, client):
+        assert client.get("/app.js").status_code == 200
+        assert client.get("/styles.css").status_code == 200

@@ -38,6 +38,17 @@ executions_bp = Blueprint("executions", __name__, url_prefix="/api/v1/executions
 ai_bp = Blueprint("ai", __name__, url_prefix="/api/v1/ai")
 
 
+# Upper bound on any list endpoint's page size, whatever the caller asks for.
+MAX_PAGE_SIZE = 1000
+
+
+def get_page_params(default_limit: int) -> tuple:
+    """Read limit/offset from the query string, clamped to safe bounds."""
+    limit = int(request.args.get("limit", default_limit))
+    offset = int(request.args.get("offset", 0))
+    return max(1, min(limit, MAX_PAGE_SIZE)), max(0, offset)
+
+
 def get_db() -> Database:
     """Get database from Flask app config."""
     from flask import current_app
@@ -150,8 +161,7 @@ def list_workflows():
     Response: 200 OK
     """
     status = request.args.get("status")
-    limit = int(request.args.get("limit", 100))
-    offset = int(request.args.get("offset", 0))
+    limit, offset = get_page_params(default_limit=100)
     
     status_enum = WorkflowStatus(status) if status else None
     
@@ -362,8 +372,7 @@ def list_executions():
     """
     workflow_id = request.args.get("workflow_id")
     status = request.args.get("status")
-    limit = int(request.args.get("limit", 100))
-    offset = int(request.args.get("offset", 0))
+    limit, offset = get_page_params(default_limit=100)
     
     workflow_uuid = UUID(workflow_id) if workflow_id else None
     status_enum = ExecutionStatus(status) if status else None
@@ -442,8 +451,7 @@ def get_execution_logs(execution_id: str):
     Response: 200 OK
     """
     level = request.args.get("level")
-    limit = int(request.args.get("limit", 1000))
-    offset = int(request.args.get("offset", 0))
+    limit, offset = get_page_params(default_limit=1000)
     
     level_enum = LogLevel(level) if level else None
     
@@ -554,6 +562,13 @@ def generate_workflow():
 
     Response: 200 OK with validated steps
     """
+    from flask import current_app
+    if not current_app.config["APP_CONFIG"].LLM_ENABLED:
+        return jsonify({
+            "error": "The AI workflow generator is disabled in this deployment",
+            "hint": "Run the project locally with Ollama to use it",
+        }), 503
+
     data = request.get_json()
 
     if not data or not data.get("prompt"):
@@ -587,8 +602,14 @@ def generate_workflow():
 # ROUTE REGISTRATION
 # ============================================
 
-def register_routes(app: Flask) -> None:
+def register_routes(app: Flask, limiter=None, write_limit: str = None) -> None:
     """Register all blueprints with the Flask app."""
+    # Writes create rows and queue work, so they get a tighter per-client cap
+    # on top of the app-wide default limit.
+    if limiter is not None and write_limit:
+        for bp in (workflows_bp, executions_bp, ai_bp):
+            limiter.limit(write_limit, methods=["POST"])(bp)
+
     app.register_blueprint(workflows_bp)
     app.register_blueprint(executions_bp)
     app.register_blueprint(ai_bp)
