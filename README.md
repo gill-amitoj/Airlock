@@ -1,10 +1,10 @@
-# ⚡ Workflow Orchestration Engine
+# Workflow Orchestration Engine
 
 This is a real backend system for running multi-step workflows with retries, failure recovery, and audit logging. Built with Python, Flask, PostgreSQL, Redis, and Docker. Comes with a visual dashboard and a one-command demo script!
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 1. **Start everything:**
    ```bash
@@ -150,4 +150,4 @@ workflow-orchestration-engine/
 
 ## 💬 Questions?
 
-Open an issue or reach out if you have questions or feedback!
+Open an issue or reach out to me if you have questions or feedback!
